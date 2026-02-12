@@ -1,0 +1,3 @@
+# AuMonitor
+
+Initial repository setup.
