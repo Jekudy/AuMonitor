@@ -46,11 +46,20 @@ export interface Logger {
   error(message: string, details?: unknown): void
 }
 
+export type TelemetryValue = string | number | boolean | null
+
+export interface TelemetryPort {
+  track(
+    eventName: string,
+    payload?: Record<string, TelemetryValue>,
+  ): void
+}
+
 export interface AppDependencies {
   devicePort: DevicePort
   monitoringPort: MonitoringPort
   settingsStore: SettingsPort
   capabilitiesService: CapabilitiesService
   logger: Logger
+  telemetry: TelemetryPort
 }
-

@@ -7,16 +7,18 @@
 
 ## Current Pipeline
 - Workflow: `.github/workflows/deploy-pages.yml`
-- Trigger: successful `CI` run for `main` (and manual dispatch)
+- Trigger: successful `CI` run for `main`
 - Build: `npm ci` + `npm run build`
 - Artifact: `dist/`
 - Deploy target: GitHub Pages
+- Post deploy: `.github/workflows/post-deploy-smoke.yml` validates live URL with bounded retries
 
 ## One-time Setup (Repository)
 1. In GitHub repository settings, open `Pages`.
 2. Set `Build and deployment` to `GitHub Actions`.
 3. Ensure default branch is `main`.
-4. In branch protection for `main`, require `CI` workflow status checks before merge.
+4. In branch protection for `main`, require `CI` workflow status checks and at least one PR approval before merge.
+5. If Pages API returns `422 plan does not support` for a private repo, make repository public or use a plan that supports private Pages.
 
 ## Deploy Flow
 1. Merge changes into `main`.

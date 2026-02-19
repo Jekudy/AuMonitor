@@ -5,7 +5,11 @@ import { normalizeMonitoringError } from '../application/errors'
 import { appMachine } from '../application/machine'
 import type { AppDependencies } from '../application/ports'
 import { DEFAULT_PREFERENCES, ZERO_METER } from '../domain/audio'
-import type { DeviceOption, MonitoringPreferences } from '../domain/types'
+import type {
+  DeviceOption,
+  MonitoringPreferences,
+  MonitoringWarningCode,
+} from '../domain/types'
 
 interface DeviceLists {
   inputs: DeviceOption[]
@@ -13,6 +17,11 @@ interface DeviceLists {
 }
 
 type ReconfigureReason = 'mode' | 'input' | 'device_change'
+
+interface PendingStartTelemetry {
+  attemptId: number
+  startedAtMs: number
+}
 
 const DEFAULT_INPUT: DeviceOption = {
   id: 'default',
@@ -50,12 +59,16 @@ export function useAuMonitorController(dependencies: AppDependencies) {
   })
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false)
 
-  const permissionLockRef = useRef(false)
+  const permissionRequestRef = useRef<Promise<void> | null>(null)
+  const permissionGrantedRef = useRef(false)
+  const permissionPreflightAttemptedRef = useRef(false)
   const startAttemptRef = useRef(0)
   const stopLockRef = useRef(false)
   const restartAfterStopRef = useRef(false)
   const pendingReconfigureRef = useRef<ReconfigureReason | null>(null)
   const preferencesRef = useRef(preferences)
+  const pendingStartTelemetryRef = useRef<PendingStartTelemetry | null>(null)
+  const nextStartTelemetryIdRef = useRef(0)
 
   const isIdle = state.matches('idle')
   const isError = state.matches('error')
@@ -80,6 +93,78 @@ export function useAuMonitorController(dependencies: AppDependencies) {
   const queueReconfigure = useCallback((reason: ReconfigureReason) => {
     pendingReconfigureRef.current = reason
   }, [])
+
+  const trackWarningEvent = useCallback(
+    (code?: MonitoringWarningCode) => {
+      dependencies.telemetry.track('warning_events_by_code', {
+        code: code || 'unknown',
+      })
+    },
+    [dependencies.telemetry],
+  )
+
+  const emitSessionWarning = useCallback(
+    (message: string, code?: MonitoringWarningCode) => {
+      trackWarningEvent(code)
+      send({
+        type: 'SESSION_WARNING',
+        message,
+        code,
+      })
+    },
+    [send, trackWarningEvent],
+  )
+
+  const finalizeStartTelemetry = useCallback(
+    (
+      outcome: 'success' | 'failure',
+      options?: {
+        errorCode?: string
+      },
+    ) => {
+      const pending = pendingStartTelemetryRef.current
+      if (!pending) {
+        return
+      }
+      pendingStartTelemetryRef.current = null
+
+      if (outcome === 'success') {
+        const elapsedMs = Math.max(0, performance.now() - pending.startedAtMs)
+        dependencies.telemetry.track('monitor_start_success', {
+          attempt_id: pending.attemptId,
+        })
+        dependencies.telemetry.track('time_to_monitoring_ms', {
+          attempt_id: pending.attemptId,
+          value_ms: Math.round(elapsedMs),
+        })
+        return
+      }
+
+      dependencies.telemetry.track('monitor_start_failure_by_error_code', {
+        attempt_id: pending.attemptId,
+        error_code: options?.errorCode || 'unknown',
+      })
+    },
+    [dependencies.telemetry],
+  )
+
+  const ensureInputPermission = useCallback(async () => {
+    if (permissionGrantedRef.current) {
+      return
+    }
+    if (permissionRequestRef.current) {
+      return permissionRequestRef.current
+    }
+    const request = dependencies.devicePort.requestInputPermission()
+      .then(() => {
+        permissionGrantedRef.current = true
+      })
+      .finally(() => {
+        permissionRequestRef.current = null
+      })
+    permissionRequestRef.current = request
+    return request
+  }, [dependencies.devicePort])
 
   const refreshDevices = useCallback(async () => {
     setIsRefreshingDevices(true)
@@ -122,28 +207,28 @@ export function useAuMonitorController(dependencies: AppDependencies) {
 
       if (inputFallbackApplied) {
         queueReconfigure('device_change')
-        send({
-          type: 'SESSION_WARNING',
-          message: 'Selected input is unavailable. Switched to System Default.',
-        })
+        emitSessionWarning(
+          'Selected input is unavailable. Switched to System Default.',
+        )
       }
       if (outputFallbackApplied) {
-        send({
-          type: 'SESSION_WARNING',
-          message: 'Selected output is unavailable. Switched to default output.',
-          code: 'output_switch_failed',
-        })
+        emitSessionWarning(
+          'Selected output is unavailable. Switched to default output.',
+          'output_switch_failed',
+        )
       }
     } catch (error) {
       dependencies.logger.warn('Device refresh failed.', { error })
-      send({
-        type: 'SESSION_WARNING',
-        message: 'Could not refresh devices. Try again.',
-      })
+      emitSessionWarning('Could not refresh devices. Try again.')
     } finally {
       setIsRefreshingDevices(false)
     }
-  }, [capabilities.supportsSetSinkId, dependencies, queueReconfigure, send])
+  }, [
+    capabilities.supportsSetSinkId,
+    dependencies,
+    emitSessionWarning,
+    queueReconfigure,
+  ])
 
   useEffect(() => {
     const unsubscribe = dependencies.devicePort.onDeviceChange(() => {
@@ -155,26 +240,61 @@ export function useAuMonitorController(dependencies: AppDependencies) {
   }, [dependencies.devicePort, refreshDevices, send])
 
   useEffect(() => {
+    if (permissionPreflightAttemptedRef.current) {
+      return
+    }
+    if (!capabilities.secureContext || !capabilities.hasMediaDevices) {
+      return
+    }
+    permissionPreflightAttemptedRef.current = true
+    ;(async () => {
+      try {
+        await ensureInputPermission()
+        void refreshDevices()
+      } catch (error) {
+        const normalized = normalizeMonitoringError(error)
+        dependencies.logger.info('Initial microphone permission preflight failed.', {
+          code: normalized.code,
+          message: normalized.message,
+        })
+        emitSessionWarning(normalized.message)
+      }
+    })()
+  }, [
+    capabilities.hasMediaDevices,
+    capabilities.secureContext,
+    dependencies.logger,
+    emitSessionWarning,
+    ensureInputPermission,
+    refreshDevices,
+  ])
+
+  useEffect(() => {
     dependencies.settingsStore.save(preferences)
   }, [dependencies.settingsStore, preferences])
 
   useEffect(() => {
-    if (!isRequestingPermission || permissionLockRef.current) {
+    if (!isRequestingPermission) {
       return
     }
-    permissionLockRef.current = true
     ;(async () => {
       try {
-        await dependencies.devicePort.requestInputPermission()
+        await ensureInputPermission()
         send({ type: 'PERMISSION_GRANTED' })
+        void refreshDevices()
       } catch (error) {
         const normalized = normalizeMonitoringError(error)
+        finalizeStartTelemetry('failure', { errorCode: normalized.code })
         send({ type: 'PERMISSION_DENIED', message: normalized.message })
-      } finally {
-        permissionLockRef.current = false
       }
     })()
-  }, [dependencies.devicePort, isRequestingPermission, send])
+  }, [
+    ensureInputPermission,
+    finalizeStartTelemetry,
+    isRequestingPermission,
+    refreshDevices,
+    send,
+  ])
 
   useEffect(() => {
     if (!isStarting) {
@@ -207,11 +327,13 @@ export function useAuMonitorController(dependencies: AppDependencies) {
           session,
           applied: session.getAppliedConstraints(),
         })
+        finalizeStartTelemetry('success')
       } catch (error) {
         if (cancelled || startAttemptRef.current !== startAttempt) {
           return
         }
         const normalized = normalizeMonitoringError(error)
+        finalizeStartTelemetry('failure', { errorCode: normalized.code })
         send({ type: 'SESSION_FAILED', message: normalized.message })
       }
     })()
@@ -219,7 +341,13 @@ export function useAuMonitorController(dependencies: AppDependencies) {
     return () => {
       cancelled = true
     }
-  }, [dependencies.logger, dependencies.monitoringPort, isStarting, send])
+  }, [
+    dependencies.logger,
+    dependencies.monitoringPort,
+    finalizeStartTelemetry,
+    isStarting,
+    send,
+  ])
 
   useEffect(() => {
     if (!isStopping || stopLockRef.current) {
@@ -254,6 +382,7 @@ export function useAuMonitorController(dependencies: AppDependencies) {
         })
       }
       if (update.type === 'warning') {
+        trackWarningEvent(update.code)
         send({
           type: 'SESSION_WARNING',
           message: update.message,
@@ -261,11 +390,14 @@ export function useAuMonitorController(dependencies: AppDependencies) {
         })
       }
       if (update.type === 'track-ended') {
+        dependencies.telemetry.track('session_unexpected_stop_count', {
+          reason: 'track_ended',
+        })
         send({ type: 'TRACK_ENDED' })
       }
     })
     return unsubscribe
-  }, [send, state.context.session])
+  }, [dependencies.telemetry, send, state.context.session, trackWarningEvent])
 
   useEffect(() => {
     if (!isMonitoring || !state.context.session) {
@@ -280,18 +412,49 @@ export function useAuMonitorController(dependencies: AppDependencies) {
           return
         }
         dependencies.logger.warn('Output switch failed.', { error })
-        send({
-          type: 'SESSION_WARNING',
-          message: 'Cannot switch output device. Using default output.',
-          code: 'output_switch_failed',
-        })
+        emitSessionWarning(
+          'Cannot switch output device. Using default output.',
+          'output_switch_failed',
+        )
         setPreferences((current) => ({ ...current, outputId: 'default' }))
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [dependencies.logger, isMonitoring, preferences.outputId, send, state.context.session])
+  }, [
+    dependencies.logger,
+    emitSessionWarning,
+    isMonitoring,
+    preferences.outputId,
+    state.context.session,
+  ])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!isMonitoring) {
+        return
+      }
+      if (document.visibilityState === 'hidden') {
+        emitSessionWarning(
+          'Tab moved to background. Browser may pause audio processing.',
+          'context_not_running',
+        )
+        return
+      }
+      if (document.visibilityState === 'visible') {
+        dependencies.logger.info(
+          'Tab became visible again. Refreshing device state after resume.',
+        )
+        void refreshDevices()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [dependencies.logger, emitSessionWarning, isMonitoring, refreshDevices])
 
   useEffect(() => {
     if (!isIdle || !restartAfterStopRef.current) {
@@ -428,9 +591,26 @@ export function useAuMonitorController(dependencies: AppDependencies) {
     setHeadphonesConfirmed,
     refreshDevices,
     start() {
+      if (!canStart || isBusy) {
+        return
+      }
+      nextStartTelemetryIdRef.current += 1
+      pendingStartTelemetryRef.current = {
+        attemptId: nextStartTelemetryIdRef.current,
+        startedAtMs: performance.now(),
+      }
+      dependencies.telemetry.track('monitor_start_attempts', {
+        attempt_id: nextStartTelemetryIdRef.current,
+        mode: preferencesRef.current.mode,
+        input_id: preferencesRef.current.inputId,
+        output_id: preferencesRef.current.outputId,
+      })
       send({ type: 'START_CLICKED' })
     },
     stop() {
+      if (isRequestingPermission || isStarting) {
+        finalizeStartTelemetry('failure', { errorCode: 'cancelled' })
+      }
       restartAfterStopRef.current = false
       send({ type: 'STOP_CLICKED' })
     },

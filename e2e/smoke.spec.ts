@@ -20,3 +20,16 @@ test('shows fallback message when output selection is unsupported', async ({
   await expect(page.locator('#outputSelect')).toBeDisabled()
 })
 
+test('keeps layout stable on mobile width', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+
+  await expect(page.getByRole('heading', { name: 'AuMonitor' })).toBeVisible()
+  await expect(page.locator('#inputSelect')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Start' })).toBeVisible()
+
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  )
+  expect(hasHorizontalOverflow).toBe(false)
+})

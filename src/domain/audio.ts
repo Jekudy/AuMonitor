@@ -51,11 +51,12 @@ export function buildAudioConstraints(
     relaxProcessing?: boolean
   },
 ): MediaTrackConstraints {
-  const callLike = mode === 'callLike' && options?.relaxProcessing !== true
+  const isCallLike = mode === 'callLike'
+  const relaxedCallLike = isCallLike && options?.relaxProcessing === true
   const constraints: MediaTrackConstraints = {
-    echoCancellation: callLike,
-    noiseSuppression: callLike,
-    autoGainControl: callLike,
+    echoCancellation: isCallLike,
+    noiseSuppression: isCallLike && !relaxedCallLike,
+    autoGainControl: false,
   }
   if (inputId && inputId !== 'default') {
     constraints.deviceId = { exact: inputId }

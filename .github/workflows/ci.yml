@@ -6,6 +6,7 @@ on:
 
 jobs:
   test:
+    name: CI
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,4 +36,3 @@ jobs:
 
       - name: E2E smoke tests
         run: npm run test:e2e
-

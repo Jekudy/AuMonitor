@@ -1,0 +1,59 @@
+name: Security Audit
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  runtime-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Runtime dependency audit (blocking)
+        run: npm run audit:runtime
+
+  dev-audit-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Dev dependency audit (non-blocking report)
+        continue-on-error: true
+        run: |
+          npm run audit:dev > dev-audit.txt
+          cat dev-audit.txt
+
+      - name: Upload dev audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-audit-report
+          path: dev-audit.txt
