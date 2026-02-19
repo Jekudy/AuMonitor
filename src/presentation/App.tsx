@@ -172,8 +172,8 @@ export default function App({ dependencies = defaultDependencies }: AppProps) {
             </button>
           </div>
           <p className="muted">
-            Raw requests EC/NS/AGC = false. Call-like requests EC/NS/AGC = true
-            (best-effort).
+            Raw requests EC/NS/AGC = false. Call-like requests EC/NS = true and
+            AGC = false to reduce pumping artifacts (best-effort).
           </p>
         </section>
 

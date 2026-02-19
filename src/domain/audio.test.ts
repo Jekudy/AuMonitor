@@ -19,7 +19,7 @@ describe('audio domain', () => {
     const constraints = buildAudioConstraints('callLike', 'input-123')
     expect(constraints.echoCancellation).toBe(true)
     expect(constraints.noiseSuppression).toBe(true)
-    expect(constraints.autoGainControl).toBe(true)
+    expect(constraints.autoGainControl).toBe(false)
     expect(constraints.deviceId).toEqual({ exact: 'input-123' })
   })
 
@@ -27,7 +27,7 @@ describe('audio domain', () => {
     const constraints = buildAudioConstraints('callLike', 'input-123', {
       relaxProcessing: true,
     })
-    expect(constraints.echoCancellation).toBe(false)
+    expect(constraints.echoCancellation).toBe(true)
     expect(constraints.noiseSuppression).toBe(false)
     expect(constraints.autoGainControl).toBe(false)
     expect(constraints.deviceId).toEqual({ exact: 'input-123' })

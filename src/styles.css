@@ -246,6 +246,10 @@ button:disabled {
   margin-bottom: 14px;
 }
 
+.actions button {
+  min-width: 118px;
+}
+
 .meters {
   display: grid;
   gap: 10px;
@@ -341,11 +345,65 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .container {
+    padding: 16px 14px;
+  }
+
   .header {
     flex-direction: column;
   }
 
+  h1 {
+    font-size: 30px;
+  }
+
+  .subtitle {
+    font-size: 14px;
+  }
+
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  .segmented-btn {
+    flex: 1;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+  }
+
+  .actions button {
+    flex: 1 1 140px;
+    min-height: 42px;
+  }
+
+  .meter-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .meter-value {
+    text-align: left;
+  }
+
+  .checkbox {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 420px) {
+  h1 {
+    font-size: 26px;
+  }
+
+  .card {
+    padding: 14px;
+    border-radius: 12px;
   }
 }

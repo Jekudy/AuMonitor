@@ -5,7 +5,11 @@ import type {
   AppDependencies,
   MonitoringSessionHandle,
 } from '../application/ports'
-import type { DeviceOption, MonitoringPreferences } from '../domain/types'
+import type {
+  DeviceOption,
+  MonitoringPreferences,
+  MonitoringUpdate,
+} from '../domain/types'
 import { useAuMonitorController } from './useAuMonitorController'
 
 const DEFAULT_INPUT: DeviceOption = {
@@ -59,9 +63,21 @@ function createDependencies(options: {
   enumerateInputs?: () => Promise<DeviceOption[]>
   enumerateOutputs?: () => Promise<DeviceOption[]>
   initialPreferences?: Partial<MonitoringPreferences>
+  requestInputPermission?: () => Promise<void>
 }) {
   let deviceChangeHandler: (() => void) | null = null
-  const requestInputPermission = vi.fn(async () => undefined)
+  const requestInputPermission = vi.fn(
+    options.requestInputPermission || (async () => undefined),
+  )
+  const enumerateInputs = vi.fn(
+    options.enumerateInputs ||
+      (async () => [DEFAULT_INPUT, MIC_1]),
+  )
+  const enumerateOutputs = vi.fn(
+    options.enumerateOutputs ||
+      (async () => [DEFAULT_OUTPUT]),
+  )
+  const telemetryTrack = vi.fn()
 
   const dependencies: AppDependencies = {
     capabilitiesService: {
@@ -84,12 +100,8 @@ function createDependencies(options: {
     },
     devicePort: {
       requestInputPermission,
-      enumerateInputs:
-        options.enumerateInputs ||
-        (async () => [DEFAULT_INPUT, MIC_1]),
-      enumerateOutputs:
-        options.enumerateOutputs ||
-        (async () => [DEFAULT_OUTPUT]),
+      enumerateInputs,
+      enumerateOutputs,
       onDeviceChange(callback) {
         deviceChangeHandler = callback
         return () => {
@@ -107,10 +119,16 @@ function createDependencies(options: {
       warn: vi.fn(),
       error: vi.fn(),
     },
+    telemetry: {
+      track: telemetryTrack,
+    },
   }
 
   return {
     dependencies,
+    telemetryTrack,
+    enumerateInputs,
+    enumerateOutputs,
     requestInputPermission,
     triggerDeviceChange() {
       deviceChangeHandler?.()
@@ -122,13 +140,25 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+function setVisibilityState(value: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value,
+  })
+}
+
 describe('useAuMonitorController', () => {
   it('stops a stale session when stop is clicked during starting', async () => {
     const firstStart = createDeferred<MonitoringSessionHandle>()
     const start = vi.fn<
       (preferences: MonitoringPreferences) => Promise<MonitoringSessionHandle>
     >(() => firstStart.promise)
-    const { dependencies } = createDependencies({ start })
+    const { dependencies } = createDependencies({
+      start,
+      initialPreferences: {
+        headphonesConfirmed: true,
+      },
+    })
 
     const { result } = renderHook(() => useAuMonitorController(dependencies))
 
@@ -161,7 +191,12 @@ describe('useAuMonitorController', () => {
       starts.push(deferred)
       return deferred.promise
     })
-    const { dependencies } = createDependencies({ start })
+    const { dependencies } = createDependencies({
+      start,
+      initialPreferences: {
+        headphonesConfirmed: true,
+      },
+    })
 
     const { result } = renderHook(() => useAuMonitorController(dependencies))
 
@@ -299,6 +334,227 @@ describe('useAuMonitorController', () => {
       expect(result.current.statusMessage).toBe(
         'Could not refresh devices. Try again.',
       )
+    })
+  })
+
+  it('requests permission on load and refreshes inputs without extra prompt on start', async () => {
+    let permissionGranted = false
+    const { session } = createSession()
+    const start = vi.fn<
+      (preferences: MonitoringPreferences) => Promise<MonitoringSessionHandle>
+    >(async () => session)
+    const requestInputPermission = vi.fn(async () => {
+      permissionGranted = true
+    })
+    const { dependencies } = createDependencies({
+      start,
+      requestInputPermission,
+      enumerateInputs: async () =>
+        permissionGranted ? [DEFAULT_INPUT, MIC_1] : [DEFAULT_INPUT],
+      initialPreferences: {
+        headphonesConfirmed: true,
+      },
+    })
+
+    const { result } = renderHook(() => useAuMonitorController(dependencies))
+
+    await waitFor(() => {
+      expect(requestInputPermission).toHaveBeenCalledTimes(1)
+    })
+
+    await waitFor(() => {
+      expect(result.current.devices.inputs.map((device) => device.id)).toContain(
+        MIC_1.id,
+      )
+    })
+
+    act(() => {
+      result.current.start()
+    })
+
+    await waitFor(() => {
+      expect(start).toHaveBeenCalledTimes(1)
+    })
+
+    expect(requestInputPermission).toHaveBeenCalledTimes(1)
+  })
+
+  it('tracks start attempts, successful starts and time-to-monitoring', async () => {
+    const { session } = createSession()
+    const start = vi.fn<
+      (preferences: MonitoringPreferences) => Promise<MonitoringSessionHandle>
+    >(async () => session)
+    const { dependencies, telemetryTrack } = createDependencies({
+      start,
+      initialPreferences: {
+        headphonesConfirmed: true,
+      },
+    })
+
+    const { result } = renderHook(() => useAuMonitorController(dependencies))
+
+    act(() => {
+      result.current.start()
+    })
+
+    await waitFor(() => {
+      expect(result.current.isMonitoring).toBe(true)
+    })
+
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'monitor_start_attempts',
+      expect.objectContaining({
+        attempt_id: expect.any(Number),
+        mode: 'raw',
+      }),
+    )
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'monitor_start_success',
+      expect.objectContaining({
+        attempt_id: expect.any(Number),
+      }),
+    )
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'time_to_monitoring_ms',
+      expect.objectContaining({
+        attempt_id: expect.any(Number),
+        value_ms: expect.any(Number),
+      }),
+    )
+  })
+
+  it('tracks start failures by normalized error code for device contention', async () => {
+    const start = vi.fn<
+      (preferences: MonitoringPreferences) => Promise<MonitoringSessionHandle>
+    >(async () => {
+      throw new DOMException('busy', 'NotReadableError')
+    })
+    const { dependencies, telemetryTrack } = createDependencies({
+      start,
+      initialPreferences: {
+        headphonesConfirmed: true,
+      },
+    })
+
+    const { result } = renderHook(() => useAuMonitorController(dependencies))
+
+    act(() => {
+      result.current.start()
+    })
+
+    await waitFor(() => {
+      expect(result.current.statusKind).toBe('error')
+      expect(result.current.statusMessage).toContain('Microphone is busy')
+    })
+
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'monitor_start_failure_by_error_code',
+      expect.objectContaining({
+        error_code: 'device_busy',
+      }),
+    )
+  })
+
+  it('warns on tab backgrounding and refreshes devices on resume while monitoring', async () => {
+    setVisibilityState('visible')
+    const { session } = createSession()
+    const start = vi.fn<
+      (preferences: MonitoringPreferences) => Promise<MonitoringSessionHandle>
+    >(async () => session)
+    const { dependencies, enumerateInputs, telemetryTrack } = createDependencies({
+      start,
+      initialPreferences: {
+        headphonesConfirmed: true,
+      },
+    })
+
+    const { result } = renderHook(() => useAuMonitorController(dependencies))
+
+    act(() => {
+      result.current.start()
+    })
+
+    await waitFor(() => {
+      expect(result.current.isMonitoring).toBe(true)
+    })
+
+    const beforeResumeRefreshCalls = enumerateInputs.mock.calls.length
+
+    setVisibilityState('hidden')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    await waitFor(() => {
+      expect(result.current.statusKind).toBe('warning')
+      expect(result.current.statusCode).toBe('context_not_running')
+    })
+
+    expect(telemetryTrack).toHaveBeenCalledWith('warning_events_by_code', {
+      code: 'context_not_running',
+    })
+
+    setVisibilityState('visible')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    await waitFor(() => {
+      expect(enumerateInputs.mock.calls.length).toBeGreaterThan(
+        beforeResumeRefreshCalls,
+      )
+    })
+  })
+
+  it('tracks warning and unexpected-stop metrics from monitoring session updates', async () => {
+    let listener: ((update: MonitoringUpdate) => void) | null = null
+    const session: MonitoringSessionHandle = {
+      stop: vi.fn(async () => undefined),
+      setOutputDevice: vi.fn(async () => undefined),
+      getAppliedConstraints: () => ({}),
+      subscribe(callback) {
+        listener = callback
+        return () => {
+          listener = null
+        }
+      },
+    }
+    const start = vi.fn<
+      (preferences: MonitoringPreferences) => Promise<MonitoringSessionHandle>
+    >(async () => session)
+    const { dependencies, telemetryTrack } = createDependencies({
+      start,
+      initialPreferences: {
+        headphonesConfirmed: true,
+      },
+    })
+
+    const { result } = renderHook(() => useAuMonitorController(dependencies))
+
+    act(() => {
+      result.current.start()
+    })
+
+    await waitFor(() => {
+      expect(result.current.isMonitoring).toBe(true)
+    })
+
+    act(() => {
+      listener?.({
+        type: 'warning',
+        code: 'input_silent',
+        message: 'Input is active but signal stays near zero.',
+      })
+    })
+    act(() => {
+      listener?.({ type: 'track-ended' })
+    })
+
+    expect(telemetryTrack).toHaveBeenCalledWith('warning_events_by_code', {
+      code: 'input_silent',
+    })
+    expect(telemetryTrack).toHaveBeenCalledWith('session_unexpected_stop_count', {
+      reason: 'track_ended',
     })
   })
 })

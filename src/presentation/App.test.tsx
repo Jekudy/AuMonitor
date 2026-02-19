@@ -58,6 +58,9 @@ const deps: AppDependencies = {
     warn() {},
     error() {},
   },
+  telemetry: {
+    track() {},
+  },
 }
 
 afterEach(() => {
@@ -112,5 +115,35 @@ describe('App', () => {
     expect(
       await screen.findByText('Troubleshooting for DJI/Bluetooth input'),
     ).toBeVisible()
+  })
+
+  it('shows insecure-origin guidance and keeps Start blocked', async () => {
+    const user = userEvent.setup()
+    const insecureDeps: AppDependencies = {
+      ...deps,
+      capabilitiesService: {
+        detect() {
+          return {
+            secureContext: false,
+            hasMediaDevices: true,
+            supportsSetSinkId: false,
+          }
+        },
+      },
+    }
+
+    render(<App dependencies={insecureDeps} />)
+
+    expect(
+      screen.getByText(
+        'This page requires HTTPS or localhost for microphone access.',
+      ),
+    ).toBeVisible()
+
+    await user.click(
+      screen.getByRole('checkbox', { name: /I am using headphones/i }),
+    )
+
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled()
   })
 })

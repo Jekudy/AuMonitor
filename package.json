@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "audit:runtime": "npm audit --omit=dev --audit-level=high",
+    "audit:dev": "npm audit --audit-level=high",
     "format": "prettier --write .",
     "preview": "vite preview"
   },
