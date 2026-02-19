@@ -47,7 +47,7 @@ jobs:
 
       - name: Create issue on smoke failure
         if: ${{ failure() }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const runUrl = context.payload.workflow_run?.html_url || 'N/A'
