@@ -108,3 +108,8 @@
 #### 2026-02-19 16:01 — [ag-partner] Решение по go/no-go
 - Что обсуждено: можно ли идти в финальный rollout после закрытия reviewer findings.
 - Решение: Go (катимся), потому что блокирующие техриски закрыты: CI/deploy gate синхронизирован, post-deploy smoke устойчивее, тестовый контур зелёный.
+
+#### 2026-09-24 17:00 — [devin/swe-2] Dependabot triage (T11-go, thr_4xcmw539p7)
+- Что сделано: смержены 7 Actions-bump PR (#3,#4,#17,#18,#19,#20,#21) — каждый трогает только .github/workflows, CI green; закрыты 7 npm major-bump PR (#5,#8,#10,#12,#13,#14,#16) с комментарием «closed: major bump, not now (decision 24.09)».
+- Не тронуты: #9 (0.x minor), #11 (patch), #15 (minor) — вне скоупа задачи.
+- Решение: пользователь 24.09.2026 (t11-go item 4) — мержить только Actions, npm majors закрыть.
