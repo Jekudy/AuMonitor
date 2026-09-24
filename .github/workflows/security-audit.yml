@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload dev audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dev-audit-report
           path: dev-audit.txt
