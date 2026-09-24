@@ -108,3 +108,10 @@
 #### 2026-02-19 16:01 — [ag-partner] Решение по go/no-go
 - Что обсуждено: можно ли идти в финальный rollout после закрытия reviewer findings.
 - Решение: Go (катимся), потому что блокирующие техриски закрыты: CI/deploy gate синхронизирован, post-deploy smoke устойчивее, тестовый контур зелёный.
+
+#### 2026-09-24 19:50 — [devin/swe-2] Прод-свип: мерж dependabot #9 #11 #15
+- Что сделано: смержены dependabot-бампы #9 eslint-plugin-react-refresh 0.4.26→0.5.0 (`4fb67892`), #11 typescript-eslint 8.55→8.56 (`a2e0130b`), #15 xstate 5.27→5.28 (`a48b2d60`). Каждый: update-branch → CI green → approve Jekudy → squash.
+- Ревью: отдельный devin-субтред thr_r8q2w2repx — МЕРЖИТЬ по всем трём (eprr 0.5.0 совместим с flat-конфигом и eslint 9; tse 8.56 и xstate 5.28 аддитивны для используемых API).
+- Деплой: CI → Security Audit → Deploy Pages → Post Deploy Smoke — зелёные на всех трёх head'ах (проверено `gh run list --branch main`).
+- Заметка: у #11 GitHub рассинхронил head после update-branch — вылечено close/reopen, аппрув репостнут.
+- Осталось: PR #22 (worklog dependabot triage) ждёт аппрув не-автора — self-approval не засчитывается branch protection.
